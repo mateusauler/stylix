@@ -277,38 +277,80 @@ let
     fi
   '';
 
+  envVars = {
+    QT_QPA_PLATFORMTHEME = "kde";
+    QT_STYLE_OVERRIDE = "breeze";
+  };
+
   activateDocs = "https://stylix.danth.me/options/hm.html#stylixtargetskdeservice";
 in
 {
   options.stylix.targets.kde.enable = config.lib.stylix.mkEnableTarget "KDE" true;
 
-  config =
-    lib.mkIf
-      (config.stylix.enable && cfg.enable && pkgs.stdenv.hostPlatform.isLinux)
-      {
-        home = {
-          packages = [ themePackage ];
+  config = lib.mkIf (config.stylix.enable && config.stylix.targets.kde.enable && pkgs.stdenv.hostPlatform.isLinux) {
+    xdg = {
+      systemDirs.config = [ "${configPackage}" ];
+      configFile."kdeglobals".text = "${formatConfig colorscheme}";
+    };
 
-          # This activation entry will run the theme activator when the homeConfiguration is activated
-          # Note: This only works in an already running Plasma session.
-          activation.stylixLookAndFeel = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-            ${lib.getExe activator} || verboseEcho \
-              "KDE theme setting failed. See `${activateDocs}`"
-          '';
-        };
+    systemd.user.sessionVariables = envVars;
 
-        xdg = {
-          systemDirs.config = [ "${configPackage}" ];
+    qt = {
+      enable = true;
+    };
 
-          # This desktop entry will run the theme activator when a new Plasma session is started
-          # Note: This doesn't run again if a new homeConfiguration is activated from a running Plasma session
-          configFile."autostart/stylix-activator.desktop".text = ''
-            [Desktop Entry]
-            Type=Application
-            Exec=${lib.getExe activator}
-            Name=Stylix Activator
-            X-KDE-AutostartScript=true
-          '';
-        };
-      };
+    home = {
+      packages = with pkgs; [
+        themePackage
+
+        # QT6 packages (note that full does not mean "install all of KDE", just all of Qt6)
+        (hiPrio kdePackages.full)
+        (hiPrio kdePackages.breeze-icons)
+        (hiPrio kdePackages.breeze)
+        (hiPrio kdePackages.plasma-integration)
+        (hiPrio kdePackages.qqc2-breeze-style)
+        (hiPrio kdePackages.qqc2-desktop-style)
+
+        # QT5 packages
+        libsForQt5.full
+        libsForQt5.breeze-icons
+        libsForQt5.breeze-qt5
+        libsForQt5.qqc2-breeze-style
+        libsForQt5.qqc2-desktop-style
+        libsForQt5.plasma-integration
+      ];
+
+      sessionVariables = envVars;
+
+      # plasma-apply-wallpaperimage is necessary to change the wallpaper
+      # after the first login.
+      #
+      # Home Manager clears $PATH before running the activation script, but we
+      # want to avoid installing these tools explicitly because that would pull
+      # in large dependencies for people who aren't actually using KDE.
+      # The workaround used is to assume a list of common paths where the tools
+      # might be installed, and look there. The ideal solution would require
+      # changes to KDE to make it possible to update the wallpaper through
+      # config files alone.
+      activation.stylixLookAndFeel = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        global_path() {
+          for directory in /run/current-system/sw/bin /usr/bin /bin; do
+            if [[ -f "$directory/$1" ]]; then
+              printf '%s\n' "$directory/$1"
+              return 0
+            fi
+          done
+
+          return 1
+        }
+
+        if wallpaper_image="$(global_path plasma-apply-wallpaperimage)"; then
+          "$wallpaper_image" "${themePackage}/share/wallpapers/stylix"
+        else
+          verboseEcho \
+            "plasma-apply-wallpaperimage: command not found"
+        fi
+      '';
+    };
+  };
 }
